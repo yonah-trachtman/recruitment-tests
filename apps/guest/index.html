@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="description" content="Offisito Web App for Guests">
+  <title>Offisito App</title>
+  <base href="/"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="theme-color" content="#ABE5F7">
+  <link rel="icon" type="image/x-icon" href="/favicon.ico"/>
+  <script id="env-config" type="application/json">"%ENV_VARIABLES%"</script>
+  <link rel="manifest" href="manifest.json"/>
+  <link rel="apple-touch-icon" sizes="192x192" href="/l192m.png"/>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <style>
+    .bndloader {
+      border: 16px solid #f3f3f3;
+      border-radius: 50%;
+      border-top: 16px solid #3498db;
+      width: 120px;
+      height: 120px;
+      animation: spin 2s linear infinite;
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+    }
+
+    @keyframes spin {
+      0% {
+        transform: translate(-50%, -50%) rotate(0deg);
+      }
+      100% {
+        transform: translate(-50%, -50%) rotate(360deg);
+      }
+    }
+  </style>
+</head>
+<body style="margin: 0">
+<div class="bndloader"></div>
+<div id="root" style="width: 100vw; height: 100vh"></div>
+<script type="module" src="/src/main.tsx"></script>
+</body>
+</html>

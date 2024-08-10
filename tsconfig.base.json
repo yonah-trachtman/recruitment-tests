@@ -1,0 +1,42 @@
+{
+  "compileOnSave": false,
+  "compilerOptions": {
+    "rootDir": ".",
+    "sourceMap": true,
+    "declaration": false,
+    "moduleResolution": "node",
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "importHelpers": true,
+    "target": "es2015",
+    "module": "esnext",
+    "lib": [
+      "es2020",
+      "dom"
+    ],
+    "skipLibCheck": true,
+    "skipDefaultLibCheck": true,
+    "resolveJsonModule": true,
+    "baseUrl": ".",
+    "paths": {
+      "@offisito-shared": ["libs/offisito-shared/src/index.ts"],
+      "@base-frontend": ["libs/base-frontend/src/index.ts"],
+      "@offisito-frontend": ["libs/offisito-frontend/src/index.ts"],
+      "@auth-backend": ["libs/auth-backend/src/index.ts"],
+      "@chat-backend": ["libs/chat-backend/src/index.ts"],
+      "@base-backend": ["libs/base-backend/src/index.ts"],
+      "@base-shared": ["libs/base-shared/src/index.ts"],
+      "@email-backend": ["libs/email-backend/src/index.ts"],
+      "@autodesk-backend": ["libs/autodesk-backend/src/index.ts"],
+      "@s3-backend": ["libs/s3-backend/src/index.ts"]
+    }
+  },
+  "include": [
+    "apps/**/*",
+    "libs/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "tmp"
+  ]
+}

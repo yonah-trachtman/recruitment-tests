@@ -1,0 +1,422 @@
+name: prod - release/*
+
+on:
+  push:
+    branches:
+      - 'release/*'
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    environment: production
+    outputs:
+      dep_hash: ${{ steps.dep_hash.outputs.DEP_HASH }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 1
+          ssh-key: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20.11.0'
+
+      - name: Bump version in package.json
+        run: |
+          npm version patch --no-git-tag-version
+          NEW_VERSION=$(node -p "require('./package.json').version")
+          git config --global user.email "michael+cicd@offisito.com"
+          git config --global user.name "GitHub Action"
+          git commit -am "CI/CD Version auto-increment to $NEW_VERSION [skip ci]"
+          git tag v$NEW_VERSION
+
+
+      - name: Set up Git with SSH for pushing
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.ACTIONS_DEPLOY_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          git config user.name 'github-actions'
+          git config user.email 'github-actions@github.com'
+          git push git@github.com:${{ github.repository }} HEAD:${{ github.ref_name }}
+
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Extract version from package.json
+        run: |
+          echo "VERSION=$(cat package.json | jq -r .version)" >> $GITHUB_ENV
+
+      - name: Calculate dependencies hash
+        id: dep_hash
+        run: |
+          jq 'del(.version)' package.json > temp_package.json
+          echo "DEP_HASH=$(cat temp_package.json | sha256sum | cut -d' ' -f1)" >> $GITHUB_ENV
+          rm temp_package.json
+
+
+      - name: Check if base image exists
+        id: check_base_image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          IMAGE="${ECR_REGISTRY}/base:${DEP_HASH}"
+          if docker manifest inspect $IMAGE > /dev/null 2>&1; then
+            echo "BASE_IMAGE_EXISTS=true" >> $GITHUB_ENV
+            echo "Image $IMAGE exists."
+          else
+            echo "BASE_IMAGE_EXISTS=false" >> $GITHUB_ENV
+            echo "Image $IMAGE does not exist."
+          fi
+
+      - name: Build, tag, and push server image to Amazon ECR
+        if: env.BASE_IMAGE_EXISTS == 'false'
+        env:
+          DOCKER_BUILDKIT: 1
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          docker build -t $ECR_REGISTRY/base:${DEP_HASH} -f ./Dockerfile .
+          docker push $ECR_REGISTRY/base:${DEP_HASH}
+
+
+
+
+
+
+
+  build_server:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 1
+
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20.11.0'
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Extract version from package.json
+        run: |
+          echo "VERSION=$(cat package.json | jq -r .version)" >> $GITHUB_ENV
+
+      - name: Calculate dependencies hash
+        id: dep_hash
+        run: |
+          jq 'del(.version)' package.json > temp_package.json
+          echo "DEP_HASH=$(cat temp_package.json | sha256sum | cut -d' ' -f1)" >> $GITHUB_ENV
+          rm temp_package.json
+
+
+      - name: Build, tag, and push server image to Amazon ECR
+        env:
+          DOCKER_BUILDKIT: 1
+        run: |
+          ECR_REGISTRY=${{ steps.login-ecr.outputs.registry }}
+          docker build --build-arg DEP_HASH=${DEP_HASH} -t $ECR_REGISTRY/server:$VERSION -f ./apps/server/Dockerfile .
+          docker push $ECR_REGISTRY/server:$VERSION
+
+
+
+  build_guest:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 1
+
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20.11.0'
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+
+      - name: Extract version from package.json
+        run: |
+          echo "VERSION=$(cat package.json | jq -r .version)" >> $GITHUB_ENV
+
+      - name: Calculate dependencies hash
+        id: dep_hash
+        run: |
+          jq 'del(.version)' package.json > temp_package.json
+          echo "DEP_HASH=$(cat temp_package.json | sha256sum | cut -d' ' -f1)" >> $GITHUB_ENV
+          rm temp_package.json
+
+      - name: Build, tag, and push guest image to Amazon ECR
+        env:
+          DOCKER_BUILDKIT: 1
+        run: |
+          ECR_REGISTRY=${{ steps.login-ecr.outputs.registry }}
+          docker build --build-arg DEP_HASH=${DEP_HASH} -t $ECR_REGISTRY/guest:$VERSION -f ./apps/guest/Dockerfile .
+          docker push $ECR_REGISTRY/guest:$VERSION
+
+
+  build_admin:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 1
+
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20.11.0'
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+
+      - name: Extract version from package.json
+        run: |
+          echo "VERSION=$(cat package.json | jq -r .version)" >> $GITHUB_ENV
+
+      - name: Calculate dependencies hash
+        id: dep_hash
+        run: |
+          jq 'del(.version)' package.json > temp_package.json
+          echo "DEP_HASH=$(cat temp_package.json | sha256sum | cut -d' ' -f1)" >> $GITHUB_ENV
+          rm temp_package.json
+
+      - name: Build, tag, and push admin image to Amazon ECR
+        env:
+          DOCKER_BUILDKIT: 1
+        run: |
+          ECR_REGISTRY=${{ steps.login-ecr.outputs.registry }}
+          docker build --build-arg DEP_HASH=${DEP_HASH} -t $ECR_REGISTRY/admin:$VERSION -f ./apps/admin/Dockerfile .
+          docker push $ECR_REGISTRY/admin:$VERSION
+
+
+
+  build_host:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 1
+
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20.11.0'
+
+
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+
+
+      - name: Extract version from package.json
+        run: |
+          echo "VERSION=$(cat package.json | jq -r .version)" >> $GITHUB_ENV
+
+      - name: Calculate dependencies hash
+        id: dep_hash
+        run: |
+          jq 'del(.version)' package.json > temp_package.json
+          echo "DEP_HASH=$(cat temp_package.json | sha256sum | cut -d' ' -f1)" >> $GITHUB_ENV
+          rm temp_package.json
+
+
+      - name: Build, tag, and push host image to Amazon ECR
+        env:
+          DOCKER_BUILDKIT: 1
+        run: |
+          ECR_REGISTRY=${{ steps.login-ecr.outputs.registry }}
+          docker build --build-arg DEP_HASH=${DEP_HASH} -t $ECR_REGISTRY/host:$VERSION -f ./apps/host/Dockerfile .
+          docker push $ECR_REGISTRY/host:$VERSION
+
+
+
+  deploy_to_ecs:
+    needs: [ prepare, build_server, build_guest, build_admin, build_host ]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 1
+
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20.11.0'
+
+      - name: Extract version from package.json
+        run: |
+          echo "VERSION=$(cat package.json | jq -r .version)" >> $GITHUB_ENV
+
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Fetch current Server task definition
+        id: current-task-def-server
+        run: |
+          aws ecs describe-task-definition --task-definition server > current-server-task-def.json
+
+      - name: Fetch current Guest task definition
+        id: current-task-def-guest
+        run: |
+          aws ecs describe-task-definition --task-definition guest > current-guest-task-def.json
+
+      - name: Fetch current Admin task definition
+        id: current-task-def-admin
+        run: |
+          aws ecs describe-task-definition --task-definition admin > current-admin-task-def.json
+
+      - name: Fetch current Host task definition
+        id: current-task-def-host
+        run: |
+          aws ecs describe-task-definition --task-definition host > current-host-task-def.json
+
+      - name: Update task definition for server
+        run: |
+          jq --arg image_tag "$VERSION" --arg ecr_registry "${{ steps.login-ecr.outputs.registry }}" '.taskDefinition.containerDefinitions[0].image = $ecr_registry + "/server:" + $image_tag' current-server-task-def.json > intermediate-server-task-def.json
+          jq '.taskDefinition | del(.taskDefinitionArn, .status, .revision, .registeredAt, .registeredBy, .requiresAttributes, .compatibilities)' intermediate-server-task-def.json > final-server-task-def.json
+
+      - name: Update task definition for guest
+        run: |
+          jq --arg image_tag "$VERSION" --arg ecr_registry "${{ steps.login-ecr.outputs.registry }}" '.taskDefinition.containerDefinitions[0].image = $ecr_registry + "/guest:" + $image_tag' current-guest-task-def.json > intermediate-guest-task-def.json
+          jq '.taskDefinition | del(.taskDefinitionArn, .status, .revision, .registeredAt, .registeredBy, .requiresAttributes, .compatibilities)' intermediate-guest-task-def.json > final-guest-task-def.json
+
+      - name: Update task definition for admin
+        run: |
+          jq --arg image_tag "$VERSION" --arg ecr_registry "${{ steps.login-ecr.outputs.registry }}" '.taskDefinition.containerDefinitions[0].image = $ecr_registry + "/admin:" + $image_tag' current-admin-task-def.json > intermediate-admin-task-def.json
+          jq '.taskDefinition | del(.taskDefinitionArn, .status, .revision, .registeredAt, .registeredBy, .requiresAttributes, .compatibilities)' intermediate-admin-task-def.json > final-admin-task-def.json
+
+      - name: Update task definition for host
+        run: |
+          IMAGE_TAG=${{ needs.build_host.outputs.image_tag }}
+          jq --arg image_tag "$VERSION" --arg ecr_registry "${{ steps.login-ecr.outputs.registry }}" '.taskDefinition.containerDefinitions[0].image = $ecr_registry + "/host:" + $image_tag' current-host-task-def.json > intermediate-host-task-def.json
+          jq '.taskDefinition | del(.taskDefinitionArn, .status, .revision, .registeredAt, .registeredBy, .requiresAttributes, .compatibilities)' intermediate-host-task-def.json > final-host-task-def.json
+
+
+      - name: Register task definition for server
+        id: register-task-def-server
+        run: |
+          TASK_DEF_ARN=$(aws ecs register-task-definition --cli-input-json file://final-server-task-def.json | jq -r '.taskDefinition.taskDefinitionArn')
+          echo "TASK_DEF_ARN_SERVER=$TASK_DEF_ARN" >> $GITHUB_ENV
+
+      - name: Register task definition for guest
+        id: register-task-def-guest
+        run: |
+          TASK_DEF_ARN=$(aws ecs register-task-definition --cli-input-json file://final-guest-task-def.json | jq -r '.taskDefinition.taskDefinitionArn')
+          echo "TASK_DEF_ARN_GUEST=$TASK_DEF_ARN" >> $GITHUB_ENV
+
+      - name: Register task definition for admin
+        id: register-task-def-admin
+        run: |
+          TASK_DEF_ARN=$(aws ecs register-task-definition --cli-input-json file://final-admin-task-def.json | jq -r '.taskDefinition.taskDefinitionArn')
+          echo "TASK_DEF_ARN_ADMIN=$TASK_DEF_ARN" >> $GITHUB_ENV
+
+
+      - name: Register task definition for host
+        id: register-task-def-host
+        run: |
+          TASK_DEF_ARN=$(aws ecs register-task-definition --cli-input-json file://final-host-task-def.json | jq -r '.taskDefinition.taskDefinitionArn')
+          echo "TASK_DEF_ARN_HOST=$TASK_DEF_ARN" >> $GITHUB_ENV
+
+      - name: Update ECS Service for server
+        run: |
+          aws ecs update-service --cluster prod --service server --task-definition $TASK_DEF_ARN_SERVER
+
+      - name: Update ECS Service for guest
+        run: |
+          aws ecs update-service --cluster prod --service guest --task-definition $TASK_DEF_ARN_GUEST
+
+
+      - name: Update ECS Service for admin
+        run: |
+          aws ecs update-service --cluster prod --service admin --task-definition $TASK_DEF_ARN_ADMIN
+
+
+      - name: Update ECS Service for host
+        run: |
+          aws ecs update-service --cluster prod --service host --task-definition $TASK_DEF_ARN_HOST
+
+
