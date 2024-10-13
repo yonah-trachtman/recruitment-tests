@@ -10,6 +10,13 @@ export default defineConfig({
   server: {
     port: 4300,
     host: 'localhost',
+    fs: {
+      allow: [
+        '/home/yonah/Desktop/Projects/recruitment-tests/apps/admin',
+        '/home/yonah/Desktop/Projects/recruitment-tests/libs/base-shared',
+        '/home/yonah/Desktop/Projects/recruitment-tests/node_modules'
+      ]
+    }
   },
 
   preview: {
