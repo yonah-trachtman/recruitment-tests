@@ -1,7 +1,7 @@
 export * from './logs/errorLog';
 
 import mongoose from 'mongoose';
-import { versioning } from "@mnpcmw6444/mongoose-auto-versioning";
+import { versioning } from "@the-libs/mongo-backend";
 import { TODO } from '../types';
 
 const connection: { instance?: mongoose.Connection } = {};
